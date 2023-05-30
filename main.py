@@ -19,37 +19,51 @@ class SignSystem:
         self.websocket_url = "wss://192.168.2.9/ws/"
         self.ws = websocket.WebSocket(sslopt={"cert_reqs": ssl.CERT_NONE})
         # noinspection PyArgumentList
-        self.ws.settimeout(timeout=1)
+        self.ws.settimeout(timeout=0.5)
         self.al_signin_sys = False
         self.connect_server()
         self.al_signin_usr = self.al_signin_sys
         self.can_run = True
+        self.delta_time = datetime.timedelta()
+        self.user_real_name = ''
 
     def connect_server(self):
         # 建立 WebSocket 连接
         self.ws.connect(self.websocket_url, header=[f"Cookie: django_session={self.session_cookie}", "clientVersion: 1.1.1"])  # header的参数必须写成list形式（源码里面有解释）
-        user_info = self.receive_from_server('user_info')
+        self.receive_from_server('user_info', handshake_message=True)  # 建立连接之后服务器会自动返回一个用户信息
         self.get_signin_stats()
+        self.get_server_time_delta()
+        self.al_signin_usr = self.al_signin_sys
 
     def send_to_server(self, message_type, receive_reply=True) -> (bool, dict):
+        """
+        使用websocket发送消息给服务器，其中消息分为以下几类：
+        编号     类型            说明            发送消息                服务器回复消息
+        1       server_time     获取服务器时间
+
+        :param message_type:
+        :param receive_reply:
+        :return:
+        """
         message2type = {'server_time': 'systemTime', 'sign_in': 'signIn', 'sign_out': 'signOut', 'user_info': 'userUpdate', 'message_box': 'showMessageBox',
                         'send_message': 'sendMessage'}
         message_to_server = json.dumps({'type': message2type[message_type]})
-        try:
-            # 测试连接是否被中断
-            self.ws.send(json.dumps({"type": "systemTime"}))
-            self.ws.recv()
-        except (ConnectionAbortedError, websocket.WebSocketConnectionClosedException):
-            self.connect_server()  # reconnect
-        finally:
-            self.ws.send(message_to_server)
+        self.get_connection_state()
+        self.ws.send(message_to_server)
 
         if receive_reply:
             return self.receive_from_server(message_type)
         else:
             return False, ''
 
-    def receive_from_server(self, message_type: str) -> (bool, dict):
+    def receive_from_server(self, message_type: str, *, handshake_message: bool = False) -> (bool, dict):
+        """
+        接收服务器发回的消息
+
+        :param message_type:
+        :param handshake_message:   是否为握手消息，当服务器建立连接的时候，会自动回复一个userUpdate握手消息，从这个消息中提取
+        :return:
+        """
         message2type = {'server_time': 'systemTime', 'sign_in': 'signIn', 'sign_out': 'signOut', 'user_info': 'userUpdate', 'message_box': 'showMessageBox',
                         'send_message': 'sendMessage'}
         time_out_count = 3
@@ -57,9 +71,11 @@ class SignSystem:
             try:
                 return_info = json.loads(self.ws.recv())
                 if return_info.get('type') == message2type[message_type]:
-                    if message_type == 'user_info' and return_info.get('message').get('data').get('name') != '张浩然':
+                    if handshake_message:
+                        self.user_real_name = return_info.get('message').get('data').get('name')
+                    if message_type == 'user_info' and return_info.get('message').get('data').get('name') != self.user_real_name:
                         continue
-                    if return_info.get('message').get('result'):
+                    if message_type != 'server_time' and return_info.get('message').get('result'):
                         return True, return_info
                     else:
                         return False, return_info
@@ -82,6 +98,26 @@ class SignSystem:
         if sign_time_noon:
             if sign_time_noon[-1] == '-':
                 self.al_signin_sys = True
+        return True
+
+    def get_connection_state(self):
+        flag = False
+        while True:
+            try:
+                if not flag:
+                    self.ws.send(json.dumps({"type": "systemTime"}))
+                    flag = True
+                self.ws.recv()
+            except (ConnectionAbortedError, websocket.WebSocketConnectionClosedException):
+                self.connect_server()
+            except websocket.WebSocketTimeoutException:
+                break
+        return True
+
+    def get_server_time_delta(self):
+        _, server_time = self.send_to_server('server_time')
+        sys_time = datetime.datetime.strptime(server_time.get('message'), '%Y-%m-%d %H:%M:%S')
+        self.delta_time = sys_time - datetime.datetime.now()
         return True
 
     def sign_in(self):
@@ -129,6 +165,8 @@ class SignSystem:
         print('正在执行自动签入签出，按q退出！')
         while True:
             info = await ainput()
+            if info.lower() == 't':
+                print((datetime.datetime.now() + self.delta_time).strftime('%H:%M:%S'), self.al_signin_usr, self.al_signin_sys)
             if info.lower() == 'q':
                 self.can_run = False
                 break
@@ -153,7 +191,7 @@ class SignSystem:
         # 根据当前时间执行对应的操作
         while True:
             # 获取当前时间的小时和分钟
-            current_time = datetime.datetime.now().strftime('%H:%M')
+            current_time = (datetime.datetime.now() + self.delta_time).strftime('%H:%M')
             if self.al_signin_usr and current_time in time_mapping and self.al_signin_sys == time_mapping[current_time]:
                 if time_mapping[current_time]:
                     # out
@@ -179,3 +217,4 @@ class SignSystem:
 if __name__ == '__main__':
     t = SignSystem()
     t.sign_auto()
+    # TODO: 读取配置文件
