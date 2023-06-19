@@ -1,6 +1,7 @@
 import datetime
 import json
 import ssl
+import time
 
 import requests
 import urllib3
@@ -8,6 +9,7 @@ import websocket
 
 import asyncio
 from aioconsole import ainput
+from pynput.mouse import Listener
 
 urllib3.disable_warnings()
 
@@ -21,11 +23,12 @@ class SignSystem:
         # noinspection PyArgumentList
         self.ws.settimeout(timeout=0.5)
         self.al_signin_sys = False
+        self.user_real_name = ''
         self.connect_server()
         self.al_signin_usr = self.al_signin_sys
         self.can_run = True
         self.delta_time = datetime.timedelta()
-        self.user_real_name = ''
+        self.user_choose = None
 
     def connect_server(self):
         # 建立 WebSocket 连接
@@ -123,52 +126,108 @@ class SignSystem:
     def sign_in(self):
         flag, _ = self.send_to_server('sign_in')
         if not flag:
+            print('失败，请手动操作！')
             print(_)
+        else:
+            print('成功签入！')
+            self.al_signin_usr = True
+            self.al_signin_sys = True
         return flag
 
     def sign_out(self):
         flag, _ = self.send_to_server('sign_out')
         if not flag:
             print(_)
+            print('失败，请手动操作！')
+        else:
+            print('成功签出！')
+            self.al_signin_usr = False
+            self.al_signin_sys = False
         return flag
 
     def sign_auto(self):
+        def user_sign_auto():
+            # 启动两个任务，分别是自动签入签出和非阻塞read
+            self.can_run = True
+            loop = asyncio.get_event_loop()
+            tasks = [loop.create_task(self.get_input_auto()), loop.create_task(self.auto_sign_inout())]
+            loop.run_until_complete(asyncio.wait(tasks))
+
+        def user_sign_in():
+            self.can_run = True
+            self.user_choose = None
+            loop = asyncio.get_event_loop()
+            tasks = [loop.create_task(self.get_input_in()), ]
+            if not self.al_signin_sys:
+                tasks.append(loop.create_task(self.get_mouse()))
+            done, pending = loop.run_until_complete(asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED))
+            for task in pending:
+                task.cancel()
+            loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+
         print('自动签到、签退系统，仅供辅助签入签出，请勿刷时长！！！')
         while True:
-            choose = input(f'[{"×" if self.al_signin_sys else "1"}] 手动签入\t [{"×" if not self.al_signin_sys else "2"}] 手动签出\t [3] 开始自动签入签出\n')
-            if choose == '1' and not self.al_signin_sys:
+            self.get_signin_stats()
+            print(f'[{"×" if self.al_signin_sys else "1"}] 手动签入\t [{"×" if not self.al_signin_sys else "2"}] 手动签出\t [3] 开始自动签入签出')
+            user_sign_in()
+
+            if self.user_choose == '1' and not self.al_signin_sys:
                 if self.sign_in():
-                    print('成功签入！')
-                    self.al_signin_usr = True
-                    self.al_signin_sys = True
-                else:
-                    print('失败，请手动操作！')
-            if choose == '2' and self.al_signin_sys:
-                if self.sign_out():
-                    print('成功签出！')
-                    self.al_signin_usr = False
-                    self.al_signin_sys = False
-                else:
-                    print('失败，请手动操作！')
-            if choose == '3':
+                    user_sign_auto()
+            if self.user_choose == '2' and self.al_signin_sys:
+                self.sign_out()
+            if self.user_choose == '3':
                 if not self.al_signin_usr:
                     print('请先签入！')
-                    continue
+                else:
+                    user_sign_auto()
 
-                # 启动两个任务，分别是自动签入签出和非阻塞read
-                self.can_run = True
-                loop = asyncio.get_event_loop()
-                tasks = [loop.create_task(self.get_input()), loop.create_task(self.auto_sign_inout())]
-                loop.run_until_complete(asyncio.wait(tasks))
+    async def get_mouse(self):
+        mouse_moved = False
+        mouse_moved_time = time.time()
+        activate_time = 0.1 * 60
+        reset_time = 0.3 * 60
 
-    async def get_input(self):
-        print('正在执行自动签入签出，按q退出！')
+        def mouse_activate(*args):
+            nonlocal mouse_moved, mouse_moved_time
+            if time.time() - mouse_moved_time < reset_time:
+                if time.time() - mouse_moved_time > activate_time:
+                    mouse_moved = True
+            else:
+                mouse_moved_time = time.time()
+
+        def check_mouse_movement():
+            while not mouse_moved:
+                if not self.can_run:
+                    break
+                time.sleep(0.1)  # 添加适当的延时
+
+        with Listener(on_move=mouse_activate, on_click=mouse_activate, on_scroll=mouse_activate):
+            check_mouse_movement()
+        self.user_choose = '1'
+        self.can_run = False
+
+    async def get_input_in(self):
+        while True:
+            info = await ainput()
+            if info:
+                self.user_choose = info
+                self.can_run = False
+            if not self.can_run:
+                break
+
+    async def get_input_auto(self):
+        print('正在执行自动签入签出，按q退出，按o签出！')
         while True:
             info = await ainput()
             if info.lower() == 't':
                 print((datetime.datetime.now() + self.delta_time).strftime('%H:%M:%S'), self.al_signin_usr, self.al_signin_sys)
             if info.lower() == 'q':
                 self.can_run = False
+                break
+            if info.lower() == 'o':
+                self.can_run = False
+                self.sign_out()
                 break
 
     async def auto_sign_inout(self):
