@@ -2,3 +2,6 @@ requests
 urllib3
 websocket-client
 aioconsole
+mitmproxy==6.0.2
+markupsafe==2.0.1
+jinja2>=3.0

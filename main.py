@@ -191,7 +191,7 @@ class SignSystem:
         # 根据当前时间执行对应的操作
         while True:
             # 获取当前时间的小时和分钟
-            current_time = (datetime.datetime.now() + self.delta_time).strftime('%H:%M')
+            current_time = (datetime.datetime.now() + self.delta_time - datetime.timedelta(seconds=10)).strftime('%H:%M')  # 防止服务器时间获取不准确，延迟10秒执行
             if self.al_signin_usr and current_time in time_mapping and self.al_signin_sys == time_mapping[current_time]:
                 if time_mapping[current_time]:
                     # out
