@@ -123,23 +123,23 @@ class SignSystem:
         self.delta_time = sys_time - datetime.datetime.now()
         return True
 
-    def sign_in(self):
+    def sign_in(self, auto=False):
         flag, _ = self.send_to_server('sign_in')
         if not flag:
             print('失败，请手动操作！')
             print(_)
-        else:
+        elif not auto:
             print('成功签入！')
             self.al_signin_usr = True
             self.al_signin_sys = True
         return flag
 
-    def sign_out(self):
+    def sign_out(self, auto=False):
         flag, _ = self.send_to_server('sign_out')
         if not flag:
             print(_)
             print('失败，请手动操作！')
-        else:
+        elif not auto:
             print('成功签出！')
             self.al_signin_usr = False
             self.al_signin_sys = False
@@ -254,14 +254,14 @@ class SignSystem:
             if self.al_signin_usr and current_time in time_mapping and self.al_signin_sys == time_mapping[current_time]:
                 if time_mapping[current_time]:
                     # out
-                    flag = self.sign_out()
+                    flag = self.sign_out(auto=True)
                     if flag:
                         print(f'{current_time}签出成功！')
                     else:
                         print(f'{current_time}签出失败，请手动操作！')
                 else:
                     # in
-                    flag = self.sign_in()
+                    flag = self.sign_in(auto=True)
                     if flag:
                         print(f'{current_time}签入成功！')
                     else:
